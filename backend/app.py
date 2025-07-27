@@ -1078,19 +1078,6 @@ def create_video_session():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/video/session/<session_id>/end", methods=["POST"])
-def end_video_session(session_id):
-    try:
-        # Update session status
-        video_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": {"status": "ended", "ended_at": datetime.now().isoformat()}}
-        )
-        
-        return jsonify({"success": True}), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/video/session/<session_id>/join', methods=['POST'])
 @token_required
