@@ -24,12 +24,6 @@ from routes.doctor_schedule_settings import schedule_settings
 from routes.doctor_schedule import doctor_schedule
 from routes.google_calendar import google_calendar
 from routes.doctor_public_route import doctor_routes
-from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask import request
-import uuid
-from webrtc_signaling import init_webrtc_signaling, get_active_rooms
-
-
 
 
 load_dotenv()
@@ -174,10 +168,6 @@ app.register_blueprint(google_calendar)
 app.register_blueprint(schedule_settings)
 app.register_blueprint(doctor_routes)
 
-
-print("🚀 Initializing WebRTC signaling...")
-socketio = init_webrtc_signaling(app)
-
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
@@ -186,32 +176,6 @@ def handle_preflight():
         response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization")
         response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
         return response
-
-
-@app.route("/api/webrtc/rooms", methods=["GET"])
-def get_webrtc_rooms():
-    """Get information about active WebRTC rooms"""
-    try:
-        rooms_info = get_active_rooms()
-        return jsonify({
-            "success": True,
-            "data": rooms_info
-        }), 200
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@app.route("/api/webrtc/health", methods=["GET"])
-def webrtc_health_check():
-    """Health check for WebRTC signaling"""
-    return jsonify({
-        "status": "healthy",
-        "service": "WebRTC Signaling",
-        "timestamp": datetime.now().isoformat()
-    }), 200
-
 
 # Signup route
 @app.route("/api/signup", methods=["POST"])
@@ -1046,38 +1010,77 @@ def serve_image(filename):
         return jsonify({"error": "File not found"}), 404
     
 
-@app.route("/api/video/session/create", methods=["POST"])
-def create_video_session():
+# Video Session Management Routes
+@app.route('/api/video/session/create', methods=['POST'])
+@token_required
+def create_video_session(current_user):
+    """Create a new video session for an appointment"""
     try:
-        data = request.json
+        data = request.get_json()
         appointment_id = data.get('appointment_id')
         
         if not appointment_id:
-            return jsonify({"error": "Appointment ID required"}), 400
+            return jsonify({"error": "Appointment ID is required"}), 400
         
-        # Create session data
-        session_data = {
-            "_id": str(uuid.uuid4()),
+        # Verify the appointment exists and user has access
+        appointment = appointments_collection.find_one({"_id": ObjectId(appointment_id)})
+        if not appointment:
+            return jsonify({"error": "Appointment not found"}), 404
+        
+        user_email = current_user.get('email')
+        user_role = current_user.get('role')
+        
+        # Check if user has access to this appointment
+        has_access = False
+        if user_role == 'doctor' and appointment.get('doctorName') in [f"Dr. {current_user.get('firstName')} {current_user.get('lastName')}", f"{current_user.get('firstName')} {current_user.get('lastName')}"]:
+            has_access = True
+        elif user_role == 'patient' and appointment.get('patientEmail') == user_email:
+            has_access = True
+        
+        if not has_access:
+            return jsonify({"error": "Access denied to this appointment"}), 403
+        
+        # Check if session already exists for this appointment
+        existing_session = video_sessions_collection.find_one({"appointment_id": appointment_id})
+        if existing_session and existing_session.get('status') == 'active':
+            return jsonify({
+                "session_id": str(existing_session['_id']),
+                "room_id": existing_session['room_id'],
+                "status": existing_session['status'],
+                "created_at": existing_session['created_at']
+            }), 200
+        
+        # Create new video session
+        room_id = f"room_{uuid.uuid4().hex[:12]}"
+        session_doc = {
             "appointment_id": appointment_id,
-            "room_id": f"appointment_{appointment_id}",
-            "session_id": str(uuid.uuid4()),
-            "created_at": datetime.now().isoformat(),
-            "status": "active"
+            "room_id": room_id,
+            "doctor_email": appointment.get('doctorName', '').lower().replace(' ', '.') + '@mediconnect.com',  # Placeholder
+            "patient_email": appointment.get('patientEmail'),
+            "status": "active",
+            "created_at": datetime.now(timezone.utc),
+            "created_by": user_email,
+            "participants": [],
+            "session_data": {
+                "appointment_date": appointment.get('date'),
+                "appointment_time": appointment.get('time'),
+                "doctor_name": appointment.get('doctorName'),
+                "patient_name": appointment.get('patientName')
+            }
         }
         
-        # Store in database if needed
-        video_sessions_collection.insert_one(session_data)
+        result = video_sessions_collection.insert_one(session_doc)
         
         return jsonify({
-            "success": True,
-            "session_id": session_data["session_id"],
-            "room_id": session_data["room_id"],
-            "appointment_id": appointment_id
+            "session_id": str(result.inserted_id),
+            "room_id": room_id,
+            "status": "active",
+            "message": "Video session created successfully"
         }), 201
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        print(f"Error creating video session: {e}")
+        return jsonify({"error": "Failed to create video session"}), 500
 
 @app.route('/api/video/session/<session_id>/join', methods=['POST'])
 @token_required
@@ -1128,19 +1131,39 @@ def join_video_session(current_user, session_id):
         print(f"Error joining video session: {e}")
         return jsonify({"error": "Failed to join video session"}), 500
 
-@app.route("/api/video/session/<session_id>/end", methods=["POST"])
-def end_video_session(session_id):
+@app.route('/api/video/session/<session_id>/end', methods=['POST'])
+@token_required
+def end_video_session(current_user, session_id):
+    """End a video session"""
     try:
+        session = video_sessions_collection.find_one({"_id": ObjectId(session_id)})
+        if not session:
+            return jsonify({"error": "Video session not found"}), 404
+        
+        user_email = current_user.get('email')
+        user_role = current_user.get('role')
+        
+        # Only doctor or session creator can end the session
+        if user_role != 'doctor' and session.get('created_by') != user_email:
+            return jsonify({"error": "Only doctors can end the session"}), 403
+        
         # Update session status
         video_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": {"status": "ended", "ended_at": datetime.now().isoformat()}}
+            {"_id": ObjectId(session_id)},
+            {
+                "$set": {
+                    "status": "ended",
+                    "ended_at": datetime.now(timezone.utc),
+                    "ended_by": user_email
+                }
+            }
         )
         
-        return jsonify({"success": True}), 200
+        return jsonify({"message": "Video session ended successfully"}), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error ending video session: {e}")
+        return jsonify({"error": "Failed to end video session"}), 500
 
 @app.route('/api/video/session/<session_id>/status', methods=['GET'])
 @token_required
@@ -1439,12 +1462,6 @@ def update_appointment_status(current_user, appointment_id):
         return jsonify({"error": "Internal server error"}), 500
     
 
-if __name__ == '__main__':
-    # Use SocketIO instead of regular Flask runner
-    socketio.run(
-        app, 
-        debug=True, 
-        host='0.0.0.0', 
-        port=int(os.environ.get('PORT', 5000)),
-        allow_unsafe_werkzeug=True  # Only for development
-    )
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
