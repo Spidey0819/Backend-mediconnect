@@ -18,5 +18,5 @@ Flask-Mail==0.10.0
 itsdangerous==2.2.0
 gunicorn==21.2.0
 eventlet==0.33.3
-gevent==23.9.1
+gevent==23.9.0
 gevent-websocket==0.10.1
