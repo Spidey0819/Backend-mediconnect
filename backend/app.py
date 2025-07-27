@@ -28,7 +28,10 @@ from routes.doctor_public_route import doctor_routes
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "http://localhost:3000",  # Development
+    "https://web-frontend-mediconnect.onrender.com",  # Your frontend URL
+])
 
 secret_key = os.getenv('SECRET_KEY')
 app.config['SECRET_KEY'] = secret_key
