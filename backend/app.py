@@ -55,6 +55,9 @@ app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USERNAME'] = os.getenv('SENDER_EMAIL')
 app.config['MAIL_PASSWORD'] = os.getenv('SENDER_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.getenv('SENDER_EMAIL')
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 mail = Mail(app)
 
@@ -1455,4 +1458,5 @@ def update_appointment_status(current_user, appointment_id):
     
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0')
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

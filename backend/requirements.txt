@@ -16,3 +16,4 @@ flask-socketio==5.3.6
 python-socketio==5.8.0
 Flask-Mail==0.10.0
 itsdangerous==2.2.0
+gunicorn==21.2.0
