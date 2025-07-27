@@ -28,10 +28,16 @@ from routes.doctor_public_route import doctor_routes
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app, origins=[
-    "http://localhost:3000",  # Development
-    "https://web-frontend-mediconnect.onrender.com",  # Your frontend URL
-])
+CORS(app, 
+     origins=[
+         "https://web-frontend-mediconnect.onrender.com",  # Your deployed frontend URL
+         "https://*.onrender.com"  # Allow any Render subdomain for flexibility
+     ],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=True,
+     expose_headers=["Content-Range", "X-Content-Range"]
+)
 
 secret_key = os.getenv('SECRET_KEY')
 app.config['SECRET_KEY'] = secret_key
@@ -153,6 +159,15 @@ app.register_blueprint(doctor_schedule)
 app.register_blueprint(google_calendar)
 app.register_blueprint(schedule_settings)
 app.register_blueprint(doctor_routes)
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "https://web-frontend-mediconnect.onrender.com")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization")
+        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
+        return response
 
 # Signup route
 @app.route("/api/signup", methods=["POST"])
